@@ -4,8 +4,6 @@ import os
 import sys
 import logging
 
-from logging import FileHandler, StreamHandler
-from logging.handlers import RotatingFileHandler
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse
 from dotenv import load_dotenv
