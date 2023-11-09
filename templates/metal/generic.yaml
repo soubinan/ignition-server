@@ -1,0 +1,122 @@
+variant: fcos
+version: 1.5.0
+storage:
+  files:
+    - path: /etc/hostname
+      mode: 0644
+      contents:
+        inline: $$hostname$$
+    - path: /etc/vconsole.conf
+      mode: 0644
+      contents:
+        inline: KEYMAP=us
+    - path: /etc/NetworkManager/system-connections/$$interface$$.nmconnection
+      mode: 0600
+      contents:
+        inline: |
+          [connection]
+          id=$$interface$$
+          type=ethernet
+          interface-name=$$interface$$
+          [ipv4]
+          address1=$$ip$$/$$prefix$$,$$gateway$$
+          dhcp-hostname=$$hostname$$
+          dns=$$nameserver$$;
+          dns-search=
+          may-fail=false
+          method=manual
+    - path: /etc/zincati/config.d/51-rollout-wariness.toml
+      contents:
+        inline: |
+          [identity]
+          rollout_wariness = 1.0
+    - path: /etc/zincati/config.d/55-updates-strategy.toml
+      contents:
+        inline: |
+          [updates]
+          strategy = "periodic"
+          [updates.periodic]
+          time_zone = "localtime"
+          [[updates.periodic.window]]
+          days = [ "Sun" ]
+          start_time = "05:00"
+          length_minutes = 60
+    - path: /etc/ssh/sshd_config.d/20-enable-passwords.conf
+      mode: 0644
+      contents:
+        inline: |
+          # Fedora CoreOS disables SSH password login by default.
+          # Enable it.
+          # This file must sort before 40-disable-passwords.conf.
+          PasswordAuthentication yes
+  links:
+    - path: /etc/localtime
+      target: /usr/share/zoneinfo/UTC
+systemd:
+  units:
+    - name: provision.service
+      enabled: true
+      contents: |
+        [Unit]
+        Description=Initial System Setup (post installation)
+        # We run after `systemd-machine-id-commit.service` to ensure that
+        # `ConditionFirstBoot=true` services won't rerun on the next boot.
+        After=systemd-machine-id-commit.service
+        After=network-online.target
+        # We run before `zincati.service` to avoid conflicting rpm-ostree
+        # transactions.
+        Before=zincati.service
+        ConditionPathExists=!/var/lib/.provisioned__
+
+        [Service]
+        Type=oneshot
+        RemainAfterExit=yes
+        ExecStart=/usr/bin/rpm-ostree override remove docker
+        ExecStart=/usr/bin/rpm-ostree install cockpit-system cockpit-ostree cockpit-podman cockpit-storaged cockpit-selinux cockpit-sosreport cockpit-networkmanager cockpit-kdump
+        ExecStart=/usr/bin/touch /var/lib/.provisioned__
+        ExecStart=/usr/bin/systemctl --no-block reboot
+
+        [Install]
+        WantedBy=multi-user.target
+    - name: postprovision.timer
+      enabled: true
+      contents: |
+        [Unit]
+        Description=System Post provision scheduler
+        ConditionPathExists=/var/lib/.provisioned__
+
+        [Timer]
+        OnBootSec=180
+        Unit=postprovision.service
+
+        [Install]
+        WantedBy=timers.target
+    - name: postprovision.service
+      enabled: false
+      contents: |
+        [Unit]
+        Description=System Post provision
+        # We run this after the packages have been overlayed
+        After=network-online.target
+        ConditionPathExists=/var/lib/.provisioned__
+        ConditionPathExists=!/var/lib/.postprovisioned__
+
+        [Service]
+        Type=oneshot
+        RemainAfterExit=yes
+        ExecStart=/usr/bin/echo "PasswordAuthentication yes" > /etc/ssh/sshd_config.d/02-enable-passwords.conf
+        ExecStart=/usr/bin/systemctl try-restart sshd
+        ExecStart=/usr/bin/podman container runlabel INSTALL quay.io/cockpit/ws
+        ExecStart=/usr/bin/systemctl enable cockpit.service --now
+        ExecStart=/usr/bin/systemctl enable podman --now
+        ExecStart=/bin/touch /var/lib/.postprovisioned__
+        ExecStart=/usr/bin/systemctl --no-block reboot
+passwd:
+  users:
+    - name: soubinan
+      password_hash: $1$^NhsdQNu$ZwZjYMcaPBnYMFZ3hI33X0
+      ssh_authorized_keys:
+        - ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQCh5qWa/Y4ZNh5TRMjOQQt24xDp6S3hhE9NT/DHouJpC34Oy9Ozd1SrOqzl7MFkOrrsDwAN0zuLelZ0jnt9V1MBAV7KW95yMKRAk8LjE09FO+8dFLZaGqKSQm2deEOe1V5YCMqQT82eRrDrZ2dfaRzDRqcJnT/U7xStqU5BxtUYXbKy3+WqVAuDHhq+BDYHgHFv9g9OOUkddZf4AnjSWY5WDFgMyGupeQFEpAEMSRGG9mMrka7mASN/zdarCyhTGgzqmkYU/FR0Zez5MZo4DiOxHuQjdNv0m8iVK5iE519UtTeu2IBei/VsoZd5d9FXwkNM/ieojAYs9kVeo3eJCmeYbwcLvOL5TyExHL9WREUFA5B4K5qE3E9OrXp/jUfIlEbLEa3cWDVbR+F2qYJogM/9EePF5GmFihioH8rQuHLkJJwJWRVlW+2GjWxRof93CjcDeU1Vg2Q6gIL85qVvPjxY+D38MKQAUWPI2z5/N+nu2QefOKlcBObWJZCW+Zquj80= soubinan@xps13
+      groups:
+        - wheel
+        - sudo
