@@ -53,7 +53,7 @@ def _serve_ignition(parsed_path):
             template_id = os.getenv(params['template_id'])
             params = {q.split('=')[0]: q.split('=')[1] for q in template_id.split('&') if (len(q)>0 and '=' in q)}
 
-        config_path = f"templates/{params.get('type', 'unknown_type')}/{params.get('group', 'unknown_group')}"
+        config_path = f"templates/{params.get('type')}/{params.get('name')}"
 
         err, ign = _build_ignition(config_path, params)
 
@@ -63,7 +63,7 @@ def _serve_ignition(parsed_path):
                 'Your request should follow the pattern below',
                 'Expected URI: host/<required part>?<optional part>',
                 'Required part can be:',
-                '    /ignition?type=<cloud|metal>&group=<ignition filename>[?<optional part>]',
+                '    /ignition?type=<cloud|metal>&name=<ignition template filename>[?<optional part>]',
                 ' or',
                 '    /ignition?template_id=<template_id>',
                 'Optional part: key1=value1&key2=value2...',
