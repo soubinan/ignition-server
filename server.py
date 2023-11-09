@@ -42,10 +42,6 @@ def _build_ignition(butane_filepath, params):
 
 
 def _serve_ignition(parsed_path):
-    # Expected URI: host/<required part>?<optional part>
-    # Required part: /ignition?type=<cloud|metal>&group=<ignition filename>[?<optional part>]
-    # Optional part: key1=value1&key2=value2...
-
     params = {}
     ign = None
     err = None
@@ -138,5 +134,6 @@ if __name__ == '__main__':
     listening_src = '0.0.0.0'
     listening_port = 8899
     server = HTTPServer((listening_src, listening_port), GetHandler)
-    logging.info(f'Starting server at http://{listening_src}:{listening_port}')
+    logging.info(f'Serving ignition at http://{listening_src}:{listening_port}')
+    logging.warning(f'!!! Do not be used publicly !!!')
     server.serve_forever()
