@@ -9,7 +9,7 @@ RUN wget https://github.com/coreos/butane/releases/latest/download/butane-x86_64
     chmod +x ./butane
 RUN pip install python-dotenv
 
-COPY ./server.py ./server.py
+COPY coreos/server.py ./server.py
 
 VOLUME [ "/app/templates" ]
 
