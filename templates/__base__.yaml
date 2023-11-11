@@ -2,29 +2,10 @@ variant: fcos
 version: 1.5.0
 storage:
   files:
-    - path: /etc/hostname
-      mode: 0644
-      contents:
-        inline: $$hostname$$
     - path: /etc/vconsole.conf
       mode: 0644
       contents:
         inline: KEYMAP=us
-    - path: /etc/NetworkManager/system-connections/$$interface$$.nmconnection
-      mode: 0600
-      contents:
-        inline: |
-          [connection]
-          id=$$interface$$
-          type=ethernet
-          interface-name=$$interface$$
-          [ipv4]
-          address1=$$ip$$/$$prefix$$,$$gateway$$
-          dhcp-hostname=$$hostname$$
-          dns=$$nameserver$$;
-          dns-search=
-          may-fail=false
-          method=manual
     - path: /etc/zincati/config.d/51-rollout-wariness.toml
       contents:
         inline: |
@@ -96,7 +77,7 @@ systemd:
       contents: |
         [Unit]
         Description=System Post provision
-        # We run this after the packages have been overlayed
+        # We run this after the packages have been overlaid
         After=network-online.target
         ConditionPathExists=/var/lib/.provisioned__
         ConditionPathExists=!/var/lib/.postprovisioned__

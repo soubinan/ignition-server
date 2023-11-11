@@ -1,0 +1,27 @@
+base:
+  template: ./__base__.yaml
+grabber:
+  template: ./server.yaml
+  hostname: grabber
+scraper:
+  template: ./server.yaml
+  hostname: scraper
+plex:
+  template: ./server.yaml
+  hostname: plex
+controller:
+  template: ./controller.yaml
+  interface: eno1
+  ip: 192.168.100.6
+  prefix: 24
+  gateway: 192.168.100.1
+  hostname: controller
+  nameserver: 192.168.100.1
+controller_test:
+  template: ./controller.yaml
+  interface: enp1s0
+  ip: 192.168.90.6
+  prefix: 24
+  gateway: 192.168.90.1
+  hostname: controller_test
+  nameserver: 192.168.90.1
