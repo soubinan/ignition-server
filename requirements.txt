@@ -1,5 +1,5 @@
 # Always get the latest versions
-fastapi
-uvicorn[standard]
-Jinja2
-pydantic
+fastapi>=0.104.*
+uvicorn[standard]>=0.24.*
+Jinja2>=3.*
+pydantic>=2.*
