@@ -3,7 +3,7 @@ version: 1.5.0
 ignition:
   config:
     merge:
-      - local: ./__base__.yaml
+      - local: ./__base_metal__.yaml
         verification:
           hash: sha256-d287f9950f77e34389aeb3b05978375109b883ca29ea44bea69c1b4d4eea0517
 storage:
@@ -27,3 +27,37 @@ storage:
           dns-search=
           may-fail=false
           method=manual
+systemd:
+  units:
+    - name: xenorchestra.container
+      enabled: true
+      contents: |
+        [Unit]
+        Description=XEN Orchestra Container
+        After=network-online.target
+        ConditionPathExists=/var/lib/.provisioned__
+        ConditionPathExists=/var/lib/.postprovisioned__
+
+        [Container]
+        Type=oneshot
+        RemainAfterExit=yes
+        ExecStart=/usr/bin/rpm-ostree override remove docker
+
+        [Install]
+        WantedBy=multi-user.target
+    - name: cloudstack.container
+      enabled: true
+      contents: |
+        [Unit]
+        Description=CloudStack Management Container
+        After=network-online.target
+        ConditionPathExists=/var/lib/.provisioned__
+        ConditionPathExists=/var/lib/.postprovisioned__
+
+        [Container]
+        Type=oneshot
+        RemainAfterExit=yes
+        ExecStart=/usr/bin/rpm-ostree override remove docker
+
+        [Install]
+        WantedBy=multi-user.target

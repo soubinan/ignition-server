@@ -1,13 +1,18 @@
-base:
-  template: ./__base__.yaml
+metal:
+  template: ./__base_metal__.yaml
+xcpng:
+  template: ./__base_xcpng__.yaml
+tunnel:
+  template: ./tunnel.yaml
+  hostname: tunnel
 grabber:
-  template: ./server.yaml
+  template: ./grabber.yaml
   hostname: grabber
 scraper:
-  template: ./server.yaml
+  template: ./scraper.yaml
   hostname: scraper
 plex:
-  template: ./server.yaml
+  template: ./plex.yaml
   hostname: plex
 controller:
   template: ./controller.yaml
