@@ -30,6 +30,11 @@ storage:
           # Enable it.
           # This file must sort before 40-disable-passwords.conf.
           PasswordAuthentication yes
+    - path: /etc/profile.d/zz-default-editor.sh
+      overwrite: true
+      contents:
+        inline: |
+          export EDITOR=vim
   links:
     - path: /etc/localtime
       target: /usr/share/zoneinfo/UTC
@@ -53,7 +58,8 @@ systemd:
         Type=oneshot
         RemainAfterExit=yes
         ExecStart=/usr/bin/rpm-ostree override remove docker
-        ExecStart=/usr/bin/rpm-ostree install cockpit-system cockpit-ostree cockpit-podman cockpit-storaged cockpit-selinux cockpit-sosreport cockpit-networkmanager cockpit-kdump
+        ExecStart=/usr/bin/rpm-ostree install --apply-live --allow-inactive curl vim \
+          cockpit-system cockpit-ostree cockpit-podman cockpit-storaged cockpit-selinux cockpit-sosreport cockpit-networkmanager cockpit-kdump
         ExecStart=/usr/bin/touch /var/lib/.provisioned__
         ExecStart=/usr/bin/systemctl --no-block reboot
 

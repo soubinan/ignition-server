@@ -7,57 +7,135 @@ ignition:
         verification:
           hash: sha256-d287f9950f77e34389aeb3b05978375109b883ca29ea44bea69c1b4d4eea0517
 storage:
+{% if disks %}
+  disks:
+{%  for d in disks %}
+  - device: /dev/{{ d.name }}
+    wipe_table: false
+{%   for p in d.partitions %}
+    partitions:
+    - label: {{ p.label }}
+      size_mib: {{ p.size }}
+  filesystems:
+    - path: /var/{{ p.label }}
+      device: /dev/disk/by-partlabel/{{ p.label }}
+      format: {{ p.format | default('xfs', true)}}
+      with_mount_unit: true
+{%   endfor %}
+{%  endfor %}
+{% endif %}
   files:
     - path: /etc/hostname
       mode: 0644
       contents:
         inline: {{ hostname }}
-    - path: /etc/NetworkManager/system-connections/{{ interface }}.nmconnection
+{%  for n in networks %}
+    - path: /etc/NetworkManager/system-connections/{{ n.interface }}.nmconnection
       mode: 0600
       contents:
         inline: |
           [connection]
-          id={{ interface }}
+          id={{ n.interface }}
           type=ethernet
-          interface-name={{ interface }}
+          interface-name={{ n.interface }}
           [ipv4]
-          address1={{ ip }}/{{ prefix }},{{ gateway }}
+          address1={{ n.ip }}/{{ n.prefix }},{{ n.gateway }}
           dhcp-hostname={{ hostname }}
-          dns={{ nameserver }};
+          dns={{ n.nameserver }};
           dns-search=
           may-fail=false
           method=manual
-systemd:
-  units:
-    - name: xenorchestra.container
-      enabled: true
-      contents: |
-        [Unit]
-        Description=XEN Orchestra Container
-        After=network-online.target
-        ConditionPathExists=/var/lib/.provisioned__
-        ConditionPathExists=/var/lib/.postprovisioned__
+{%  endfor %}
+    # Containers Networks
+    - path: /etc/containers/systemd/frontend.network
+      mode: 0644
+      contents:
+        inline: |
+          [Unit]
+          Description=Frontnet container network for externally accessible services
+          After=network-online.target
 
-        [Container]
-        Type=oneshot
-        RemainAfterExit=yes
-        ExecStart=/usr/bin/rpm-ostree override remove docker
+          [Install]
+          WantedBy=multi-user.target
+    - path: /etc/containers/systemd/mysql.network
+      mode: 0644
+      contents:
+        inline: |
+          [Unit]
+          Description=MySQL container network
+          After=network-online.target
 
-        [Install]
-        WantedBy=multi-user.target
-    - name: cloudstack.container
-      enabled: true
-      contents: |
-        [Unit]
-        Description=CloudStack Management Container
-        After=network-online.target
-        ConditionPathExists=/var/lib/.provisioned__
-        ConditionPathExists=/var/lib/.postprovisioned__
+          [Install]
+          WantedBy=multi-user.target
+    - path: /etc/containers/systemd/redis.network
+      mode: 0644
+      contents:
+        inline: |
+          [Unit]
+          Description=Redis container network
+          After=network-online.target
 
-        [Container]
-        Type=oneshot
-        RemainAfterExit=yes
-        ExecStart=/usr/bin/rpm-ostree override remove docker
+          [Install]
+          WantedBy=multi-user.target
+    # Containers
+    - path: /etc/containers/systemd/users/homarr.container
+      mode: 0644
+      contents:
+        inline: |
+          [Unit]
+          Description=Homarr Container
+          After=network-online.target
 
-        [Install]
-        WantedBy=multi-user.target
+          [Service]
+          TimeoutStartSec=900
+
+          [Container]
+          ContainerName=homarr
+          Image=ghcr.io/ajnart/homarr:latest
+          AutoUpdate=registry
+          HostName=homarr
+          PublishPort=7575:7575
+          Network=frontend.network
+          Volume={{ containers_data_path }}/homarr/icons:/app/public/icons:Z
+          Volume={{ containers_data_path }}/homarr/data:/app/data/configs:Z
+          Volume={{ containers_data_path }}/homarr/configs:/data:Z
+          Volume=/var/run/docker.sock:/var/run/docker.sock
+
+          [Install]
+          WantedBy=multi-user.target
+    # - path: /etc/containers/systemd/xenorchestra.container
+    #   mode: 0644
+    #   contents:
+    #     inline: |
+    #       [Unit]
+    #       Description=XEN Orchestra Container
+    #       After=network-online.target
+    #       ConditionPathExists=/var/lib/.provisioned__
+    #       ConditionPathExists=/var/lib/.postprovisioned__
+
+    #       [Service]
+    #       TimeoutStartSec=900
+
+    #       [Container]
+    #       ExecStart=/usr/bin/rpm-ostree override remove docker
+
+    #       [Install]
+    #       WantedBy=multi-user.target
+    # - path: /etc/containers/systemd/cloudstack.container
+    #   mode: 0644
+    #   contents:
+    #     inline: |
+    #       [Unit]
+    #       Description=CloudStack Management Container
+    #       After=network-online.target
+    #       ConditionPathExists=/var/lib/.provisioned__
+    #       ConditionPathExists=/var/lib/.postprovisioned__
+
+    #       [Service]
+    #       TimeoutStartSec=900
+
+    #       [Container]
+    #       ExecStart=/usr/bin/rpm-ostree override remove docker
+
+    #       [Install]
+    #       WantedBy=multi-user.target
