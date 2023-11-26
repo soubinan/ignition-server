@@ -1,0 +1,48 @@
+controller:
+  containers_data_path: /var/cdata
+  disks:
+  - name: sda
+    partitions:
+    - format: xfs
+      label: cdata
+      size: 140000
+  hostname: controller
+  network:
+    gateway: 192.168.100.1
+    interface: eno1
+    ip: 192.168.100.6
+    nameserver: 192.168.100.1
+    prefix: 24
+  template: ./controller.yaml
+controller_test:
+  containers_data_path: /var/cdata
+  disks:
+  - name: vda
+    partitions:
+    - format: xfs
+      label: cdata
+      size: 500
+  hostname: controller_test
+  networks:
+  - gateway: 192.168.90.1
+    interface: enp1s0
+    ip: 192.168.90.6
+    nameserver: 192.168.90.1
+    prefix: 24
+  template: ./controller.yaml
+grabber:
+  hostname: grabber
+  template: ./grabber.yaml
+metal:
+  template: ./__base_metal__.yaml
+plex:
+  hostname: plex
+  template: ./plex.yaml
+scraper:
+  hostname: scraper
+  template: ./scraper.yaml
+tunnel:
+  hostname: tunnel
+  template: ./tunnel.yaml
+xcpng:
+  template: ./__base_xcpng__.yaml
