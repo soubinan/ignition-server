@@ -1,51 +1,68 @@
-variant: fcos
-version: 1.5.0
-ignition:
-  config:
-    merge:
-      - local: ./__base_metal__.yaml
-        verification:
-          hash: sha256-d287f9950f77e34389aeb3b05978375109b883ca29ea44bea69c1b4d4eea0517
-storage:
-{% if disks %}
-  disks:
-{%  for d in disks %}
-  - device: /dev/{{ d.name }}
-    wipe_table: false
-{%   for p in d.partitions %}
-    partitions:
-    - label: {{ p.label }}
-      size_mib: {{ p.size }}
-  filesystems:
-    - path: /var/{{ p.label }}
-      device: /dev/disk/by-partlabel/{{ p.label }}
-      format: {{ p.format | default('xfs', true)}}
-      with_mount_unit: true
-{%   endfor %}
-{%  endfor %}
-{% endif %}
-  files:
-    - path: /etc/hostname
+{% extends "base.yaml" %}
+{% block directories %}
+    - path: {{ data_path }}/redis/data
+    - path: {{ data_path }}/mysql/data
+    - path: {{ data_path }}/homarr/icons
+    - path: {{ data_path }}/homarr/configs
+    - path: {{ data_path }}/homarr/data
+    - path: {{ data_path }}/xenorchestra/data
+    - path: {{ data_path }}/xenorchestra/backup
+{% endblock directories %}
+{% block files %}
+    - path: {{ data_path }}/xenorchestra/config.toml
       mode: 0644
       contents:
-        inline: {{ hostname }}
-{%  for n in networks %}
-    - path: /etc/NetworkManager/system-connections/{{ n.interface }}.nmconnection
-      mode: 0600
+        inline: |
+          [http]
+          # Public URL to connect to this XO
+          #
+          # This optional entry is used to communicate to external entities (e.g. XO Lite)
+          # how to connect to this XO.
+          #
+          # It SHOULD be defined in case the IP address of the current machine is not
+          # good enough (e.g. a domain name must be used or there is a reverse proxy).
+          #publicUrl = 'https://xoa.company.lan'
+
+          # Basic HTTP.
+          [[http.listen]]
+          # Address on which the server is listening on.
+          #
+          # Sets it to 'localhost' for IP to listen only on the local host.
+          #
+          # Default: all IPv6 addresses if available, otherwise all IPv4 addresses.
+          hostname = '0.0.0.0'
+
+          # Port on which the server is listening on.
+          #
+          # Default: undefined
+          port = 80
+
+          # Connection to the Redis server.
+          [redis]
+          # Syntax: redis://[db[:password]@]hostname[:port][/db-number]
+          #
+          # Default: redis://localhost:6379/0
+          uri = 'redis://redis:6379/0'
+
+          # Configuration for plugins
+          [plugins]
+          # Each configuration is passed to the dedicated plugin instance
+          #
+          # Syntax: [plugins.<pluginName>]
+    - path: {{ data_path }}/mysql/cloudstack.cnf
+      mode: 0644
       contents:
         inline: |
-          [connection]
-          id={{ n.interface }}
-          type=ethernet
-          interface-name={{ n.interface }}
-          [ipv4]
-          address1={{ n.ip }}/{{ n.prefix }},{{ n.gateway }}
-          dhcp-hostname={{ hostname }}
-          dns={{ n.nameserver }};
-          dns-search=
-          may-fail=false
-          method=manual
-{%  endfor %}
+          [mysqld]
+          innodb_rollback_on_timeout=1
+          innodb_lock_wait_timeout=600
+          # max_connections depends on the db servers number (350 * db_servers_count)
+          # for 1 db server  => 350
+          # for 2 db servers => 700
+          # for n db servers => n * 350
+          max_connections=350
+          log-bin=mysql-bin
+          binlog-format = 'ROW'
     # Containers Networks
     - path: /etc/containers/systemd/frontend.network
       mode: 0644
@@ -78,7 +95,56 @@ storage:
           [Install]
           WantedBy=multi-user.target
     # Containers
-    - path: /etc/containers/systemd/users/homarr.container
+    - path: /etc/containers/systemd/redis.container
+      mode: 0644
+      contents:
+        inline: |
+          [Unit]
+          Description=Redis Container
+          After=network-online.target
+
+          [Service]
+          TimeoutStartSec=900
+
+          [Container]
+          User=core
+          Group=core
+          ContainerName=redis
+          Image=docker.io/library/redis:latest
+          Exec=redis-server --appendonly yes
+          AutoUpdate=registry
+          HostName=redis
+          Network=redis.network
+          Volume={{ data_path }}/redis/data:/data:Z
+
+          [Install]
+          WantedBy=multi-user.target
+    - path: /etc/containers/systemd/mysql.container
+      mode: 0644
+      contents:
+        inline: |
+          [Unit]
+          Description=MySQL Container
+          After=network-online.target
+
+          [Service]
+          TimeoutStartSec=900
+
+          [Container]
+          User=core
+          Group=core
+          ContainerName=mysql
+          Image=docker.io/library/mysql:8.0-debian
+          AutoUpdate=registry
+          HostName=mysql
+          Network=mysql.network
+          Volume={{ data_path }}/mysql/cloudstack.cnf:/etc/mysql/conf.d/cloudstack.cnf:Z
+          Volume={{ data_path }}/mysql/data:/var/lib/mysql:Z
+          Environment=MYSQL_ALLOW_EMPTY_PASSWORD=true
+
+          [Install]
+          WantedBy=multi-user.target
+    - path: /etc/containers/systemd/homarr.container
       mode: 0644
       contents:
         inline: |
@@ -90,52 +156,48 @@ storage:
           TimeoutStartSec=900
 
           [Container]
+          User=core
+          Group=core
           ContainerName=homarr
           Image=ghcr.io/ajnart/homarr:latest
           AutoUpdate=registry
-          HostName=homarr
+          HostName=home.lab.soubilabs.xyz
           PublishPort=7575:7575
           Network=frontend.network
-          Volume={{ containers_data_path }}/homarr/icons:/app/public/icons:Z
-          Volume={{ containers_data_path }}/homarr/data:/app/data/configs:Z
-          Volume={{ containers_data_path }}/homarr/configs:/data:Z
-          Volume=/var/run/docker.sock:/var/run/docker.sock
+          Volume={{ data_path }}/homarr/icons:/app/public/icons:Z
+          Volume={{ data_path }}/homarr/configs:/app/data/configs:Z
+          Volume={{ data_path }}/homarr/data:/data:Z
+          Volume=/run/podman/podman.sock:/var/run/docker.sock:ro
+          SecurityLabelDisable=true
 
           [Install]
           WantedBy=multi-user.target
-    # - path: /etc/containers/systemd/xenorchestra.container
-    #   mode: 0644
-    #   contents:
-    #     inline: |
-    #       [Unit]
-    #       Description=XEN Orchestra Container
-    #       After=network-online.target
-    #       ConditionPathExists=/var/lib/.provisioned__
-    #       ConditionPathExists=/var/lib/.postprovisioned__
+    - path: /etc/containers/systemd/xenorchestra.container
+      mode: 0644
+      contents:
+        inline: |
+          [Unit]
+          Description=XEN Orchestra Container
+          After=network-online.target
 
-    #       [Service]
-    #       TimeoutStartSec=900
+          [Service]
+          TimeoutStartSec=900
 
-    #       [Container]
-    #       ExecStart=/usr/bin/rpm-ostree override remove docker
+          [Container]
+          User=core
+          Group=core
+          ContainerName=xenorchestra
+          Image=ghcr.io/soubinan/xoa-container:latest
+          AutoUpdate=registry
+          HostName=xcpng.lab.soubilabs.xyz
+          PublishPort=8088:80
+          Network=frontend.network
+          Network=redis.network
+          Volume={{ data_path }}/xenorchestra/config.toml:/etc/xo-server/config.toml:Z
+          Volume={{ data_path }}/xenorchestra/data:/var/lib/xo-server/data:Z
+          Volume={{ data_path }}/xenorchestra/backup:/var/lib/xoa-backup:Z
+          AddCapability=CAP_SYS_ADMIN CAP_DAC_READ_SEARCH
 
-    #       [Install]
-    #       WantedBy=multi-user.target
-    # - path: /etc/containers/systemd/cloudstack.container
-    #   mode: 0644
-    #   contents:
-    #     inline: |
-    #       [Unit]
-    #       Description=CloudStack Management Container
-    #       After=network-online.target
-    #       ConditionPathExists=/var/lib/.provisioned__
-    #       ConditionPathExists=/var/lib/.postprovisioned__
-
-    #       [Service]
-    #       TimeoutStartSec=900
-
-    #       [Container]
-    #       ExecStart=/usr/bin/rpm-ostree override remove docker
-
-    #       [Install]
-    #       WantedBy=multi-user.target
+          [Install]
+          WantedBy=multi-user.target
+{% endblock files %}

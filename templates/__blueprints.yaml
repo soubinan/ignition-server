@@ -1,40 +1,33 @@
 controller:
-  containers_data_path: /var/cdata
-  disks:
-  - name: sda
-    partitions:
-    - format: xfs
-      label: cdata
-      size: 140000
+  template: ./controller.yaml
   hostname: controller
-  network:
-    gateway: 192.168.100.1
+  data_partdisk: sda
+  data_partsize: 180000
+  data_path: /var/cdata
+  install_cockpit: true
+  networks:
+  - gateway: 192.168.100.1
     interface: eno1
     ip: 192.168.100.6
     nameserver: 192.168.100.1
     prefix: 24
-  template: ./controller.yaml
 controller_test:
-  containers_data_path: /var/cdata
-  disks:
-  - name: vda
-    partitions:
-    - format: xfs
-      label: cdata
-      size: 500
+  template: ./controller.yaml
   hostname: controller_test
+  data_partsize: 5000
+  data_path: /var/cdata
+  install_cockpit: true
   networks:
   - gateway: 192.168.90.1
     interface: enp1s0
     ip: 192.168.90.6
     nameserver: 192.168.90.1
     prefix: 24
-  template: ./controller.yaml
 grabber:
   hostname: grabber
   template: ./grabber.yaml
 metal:
-  template: ./__base_metal__.yaml
+  template: ./base_metal.yaml
 plex:
   hostname: plex
   template: ./plex.yaml
@@ -45,4 +38,10 @@ tunnel:
   hostname: tunnel
   template: ./tunnel.yaml
 xcpng:
-  template: ./__base_xcpng__.yaml
+  template: ./base_xcpng.yaml
+base:
+  template: ./base.yaml
+  hostname: coreos
+  data_partdisk: none
+  data_partsize: 0
+  data_path: /var/cdata

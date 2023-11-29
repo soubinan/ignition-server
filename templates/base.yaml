@@ -1,7 +1,71 @@
 variant: fcos
 version: 1.5.0
 storage:
+  disks:
+  - # The link to the block device the OS was booted from.
+    device: /dev/disk/by-id/coreos-boot-disk
+    wipe_table: false
+    partitions:
+    - number: 4
+      label: root
+      size_mib: 8192
+      resize: true
+    - label: var
+      size_mib: {{ data_partsize }}
+{%  for d in disks %}
+  - device: /dev/{{ d.name }}
+    wipe_table: {{ d.wipe_table | default("false", true) }}
+{%   for p in d.partitions %}
+    partitions:
+    - label: {{ p.label }}
+      size_mib: {{ p.size }}
+{%   endfor %}
+{%  endfor %}
+  filesystems:
+    - path: /var
+      device: /dev/disk/by-partlabel/var
+      format: xfs
+      with_mount_unit: true
+{%  for d in disks %}
+{%   for p in d.partitions %}
+    - path: /var/{{ p.label }}
+      device: /dev/disk/by-partlabel/{{ p.label }}
+      format: xfs
+      with_mount_unit: true
+{%   endfor %}
+{%  endfor %}
+  directories:
+    - path: /var/cdata
+{% block directories %}
+{% endblock directories %}
   files:
+    - path: /etc/hostname
+      mode: 0644
+      contents:
+        inline: {{ hostname | default("coreos", true)}}
+    - path: /etc/profile.d/systemd-pager.sh
+      mode: 0644
+      contents:
+        inline: |
+          # Tell systemd to not use a pager when printing information
+          export SYSTEMD_PAGER=cat
+{%  for n in networks %}
+    - path: /etc/NetworkManager/system-connections/{{ n.interface }}.nmconnection
+      mode: 0600
+      contents:
+        inline: |
+          [connection]
+          id={{ n.interface }}
+          type=ethernet
+          interface-name={{ n.interface }}
+          [ipv4]
+          address1={{ n.ip }}/{{ n.prefix }},{{ n.gateway }}
+          dhcp-hostname={{ hostname }}
+          dns={{ n.nameserver }};
+          dns-search=
+          may-fail=false
+          method=manual
+{%  endfor %}
     - path: /etc/vconsole.conf
       mode: 0644
       contents:
@@ -35,9 +99,13 @@ storage:
       contents:
         inline: |
           export EDITOR=vim
+{% block files %}
+{% endblock files %}
   links:
     - path: /etc/localtime
-      target: /usr/share/zoneinfo/UTC
+      target: /usr/share/zoneinfo/{{ time_zone | default("UTC", true) }}
+{% block links %}
+{% endblock links %}
 systemd:
   units:
     - name: provision.service
@@ -57,10 +125,16 @@ systemd:
         [Service]
         Type=oneshot
         RemainAfterExit=yes
+        # No need Docker anymore ^^
         ExecStart=/usr/bin/rpm-ostree override remove docker
-        ExecStart=/usr/bin/rpm-ostree install --apply-live --allow-inactive curl vim \
-          cockpit-system cockpit-ostree cockpit-podman cockpit-storaged cockpit-selinux cockpit-sosreport cockpit-networkmanager cockpit-kdump \
-          xe-guest-utilities-latest
+        ExecStart=/usr/bin/rpm-ostree install --allow-inactive vim curl
+{% if install_cockpit %}
+        ExecStart=/usr/bin/rpm-ostree install --allow-inactive cockpit-system cockpit-ostree cockpit-podman cockpit-storaged cockpit-selinux cockpit-sosreport cockpit-networkmanager cockpit-kdump
+{% endif %}
+        ExecStart=/usr/bin/systemctl enable podman --now
+{% if install_xeguest %}
+        ExecStart=/usr/bin/rpm-ostree install --allow-inactive xe-guest-utilities-latest
+{% endif %}
         ExecStart=/usr/bin/touch /var/lib/.provisioned__
         ExecStart=/usr/bin/systemctl --no-block reboot
 
@@ -92,20 +166,63 @@ systemd:
         [Service]
         Type=oneshot
         RemainAfterExit=yes
+{% if install_cockpit %}
         ExecStart=/usr/bin/echo "PasswordAuthentication yes" > /etc/ssh/sshd_config.d/02-enable-passwords.conf
         ExecStart=/usr/bin/systemctl try-restart sshd
         ExecStart=/usr/bin/podman container runlabel INSTALL quay.io/cockpit/ws
         ExecStart=/usr/bin/systemctl enable cockpit.service --now
-        ExecStart=/usr/bin/systemctl enable podman --now
+{% endif %}
+{% if install_xeguest %}
         ExecStart=/usr/bin/systemctl enable xe-linux-distribution --now
+{% endif %}
         ExecStart=/bin/touch /var/lib/.postprovisioned__
         ExecStart=/usr/bin/systemctl --no-block reboot
+    - name: nodereadiness.service
+      enabled: enable
+      contents: |
+        [Unit]
+        Description=System Post provision
+        # We run this after the packages have been overlaid
+        After=network-online.target
+        ConditionPathExists=/var/lib/.postprovisioned__
+
+        [Service]
+        Type=oneshot
+        RemainAfterExit=yes
+        ExecStart=/usr/bin/echo "State: $(hostname) is READY !!" > /etc/issue.d/50_node-readiness.issue
+    - name: tmpcleaner.timer
+      enabled: true
+      contents: |
+        [Unit]
+        Description=Schedule the /tmp Auto-Cleaner job
+
+        [Timer]
+        Persistent=true
+        OnBootSec=300
+        OnUnitActiveSec=60
+        Unit=tmpcleaner.service
+
+        [Install]
+        WantedBy=timers.target
+    - name: tmpcleaner.service
+      enabled: false
+      contents: |
+        [Unit]
+        Description=/tmp Auto-Cleaner job
+
+        [Service]
+        ExecStart=/usr/bin/find /tmp -type f -mmin -90 -exec rm -f {} \;
+{% block units %}
+{% endblock units %}
 passwd:
   users:
     - name: soubinan
-      password_hash: $1$^NhsdQNu$ZwZjYMcaPBnYMFZ3hI33X0
+      # Generated with: podman run -ti --rm quay.io/coreos/mkpasswd --method=yescrypt
+      password_hash: $y$j9T$g9YKY7yIoGzRTP9SFByZM1$SveAvxg1YDrg05tW4zXhaI9XcpBOnufKuiH7ALFUGuA
       ssh_authorized_keys:
         - ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQCh5qWa/Y4ZNh5TRMjOQQt24xDp6S3hhE9NT/DHouJpC34Oy9Ozd1SrOqzl7MFkOrrsDwAN0zuLelZ0jnt9V1MBAV7KW95yMKRAk8LjE09FO+8dFLZaGqKSQm2deEOe1V5YCMqQT82eRrDrZ2dfaRzDRqcJnT/U7xStqU5BxtUYXbKy3+WqVAuDHhq+BDYHgHFv9g9OOUkddZf4AnjSWY5WDFgMyGupeQFEpAEMSRGG9mMrka7mASN/zdarCyhTGgzqmkYU/FR0Zez5MZo4DiOxHuQjdNv0m8iVK5iE519UtTeu2IBei/VsoZd5d9FXwkNM/ieojAYs9kVeo3eJCmeYbwcLvOL5TyExHL9WREUFA5B4K5qE3E9OrXp/jUfIlEbLEa3cWDVbR+F2qYJogM/9EePF5GmFihioH8rQuHLkJJwJWRVlW+2GjWxRof93CjcDeU1Vg2Q6gIL85qVvPjxY+D38MKQAUWPI2z5/N+nu2QefOKlcBObWJZCW+Zquj80= soubinan@xps13
       groups:
         - wheel
         - sudo
+{% block users %}
+{% endblock users %}

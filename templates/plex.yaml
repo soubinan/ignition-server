@@ -3,9 +3,9 @@ version: 1.5.0
 ignition:
   config:
     merge:
-      - local: ./__base_xcpng__.yaml
+      - local: ./base_xcpng.yaml
         verification:
-          hash: sha256-3e9c2d2b5ea0df86b76f3fc8d243cbf72b6e2b9ab4d19546135dcb1d4bf6be02
+          hash: sha256-8207cf4b9b7336b49bc605243ac027ad247f02e1dcfdd5f062a8e09e4e88d31c
 storage:
   files:
     - path: /etc/hostname
