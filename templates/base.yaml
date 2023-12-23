@@ -1,0 +1,236 @@
+{% set containers = "/var/containers" %}
+{% set bindings = "/var/containers/bindings" %}
+{% set backups = "/var/containers/backups" %}
+variant: fcos
+version: 1.5.0
+storage:
+  directories:
+    - path: {{ containers }}
+    - path: {{ bindings }}
+    - path: {{ backups }}
+{% block directories %}
+{% endblock directories %}
+  files:
+    - path: /etc/hostname
+      mode: 0644
+      contents:
+        inline: {{ hostname | default("coreos", true)}}
+    - path: /etc/issue.d/50_node-readiness.issue
+      mode: 0644
+      contents:
+        inline: "Readiness: provisioning started...\n"
+    - path: /var/tmp/50_node-readiness-ongoing.issue
+      mode: 0644
+      contents:
+        inline: "Readiness: provisioning still ongoing...\n"
+    - path: /var/tmp/50_node-readiness-ready.issue
+      mode: 0644
+      contents:
+        inline: "Readiness: ready\n"
+    - path: /etc/profile.d/systemd-pager.sh
+      mode: 0644
+      contents:
+        inline: |
+          # Tell systemd to not use a pager when printing information
+          export SYSTEMD_PAGER=cat
+{%  for n in networks %}
+    - path: /etc/NetworkManager/system-connections/{{ n.interface }}.nmconnection
+      mode: 0600
+      contents:
+        inline: |
+          [connection]
+          id={{ n.interface }}
+          type=ethernet
+          interface-name={{ n.interface }}
+          [ipv4]
+          address1={{ n.ip }}/{{ n.prefix }},{{ n.gateway }}
+          dhcp-hostname={{ hostname }}
+          dns={{ n.nameserver }};
+          dns-search=
+          may-fail=false
+          method=manual
+{%  endfor %}
+    - path: /etc/vconsole.conf
+      mode: 0644
+      contents:
+        inline: KEYMAP=us
+    - path: /etc/zincati/config.d/51-rollout-wariness.toml
+      contents:
+        inline: |
+          [identity]
+          rollout_wariness = 1.0
+    - path: /etc/zincati/config.d/55-updates-strategy.toml
+      contents:
+        inline: |
+          [updates]
+          strategy = "periodic"
+          [updates.periodic]
+          time_zone = "localtime"
+          [[updates.periodic.window]]
+          days = [ "Sun" ]
+          start_time = "05:00"
+          length_minutes = 60
+    - path: /etc/ssh/sshd_config.d/20-enable-passwords.conf
+      mode: 0644
+      contents:
+        inline: |
+          # Fedora CoreOS disables SSH password login by default.
+          # Enable it.
+          # This file must sort before 40-disable-passwords.conf.
+          PasswordAuthentication yes
+    - path: /etc/profile.d/zz-default-editor.sh
+      overwrite: true
+      contents:
+        inline: |
+          export EDITOR=vim
+{% block files %}
+{% endblock files %}
+  links:
+    - path: /etc/localtime
+      target: /usr/share/zoneinfo/{{ time_zone | default("UTC", true) }}
+{% block links %}
+{% endblock links %}
+systemd:
+  units:
+    - name: provision.service
+      enabled: true
+      contents: |
+        [Unit]
+        Description=Initial System Setup (post installation)
+        # We run after `systemd-machine-id-commit.service` to ensure that
+        # `ConditionFirstBoot=true` services won't rerun on the next boot.
+        After=systemd-machine-id-commit.service
+        After=network-online.target
+        # We run before `zincati.service` to avoid conflicting rpm-ostree
+        # transactions.
+        Before=zincati.service
+        ConditionPathExists=!/var/.provisioned__
+
+        [Service]
+        Type=oneshot
+        RemainAfterExit=yes
+        # No need Docker anymore :D
+        ExecStart=/usr/bin/rpm-ostree override remove docker
+        ExecStart=/usr/bin/rpm-ostree install --allow-inactive cockpit-system cockpit-ostree cockpit-podman cockpit-storaged cockpit-packagekit cockpit-selinux cockpit-sosreport cockpit-networkmanager cockpit-kdump
+{% if xeguest_install %}
+        ExecStart=/usr/bin/rpm-ostree install --allow-inactive xe-guest-utilities-latest
+        ExecStart=/usr/bin/systemctl enable xe-linux-distribution --now
+{% endif %}
+        ExecStart=/usr/bin/systemctl enable podman --now
+        ExecStart=/usr/bin/touch /var/.provisioned__
+        ExecStart=/usr/bin/cp /var/tmp/50_node-readiness-ongoing.issue /etc/issue.d/50_node-readiness.issue
+        ExecStartPost=/usr/bin/systemctl --no-block reboot
+
+        [Install]
+        WantedBy=multi-user.target
+    - name: postprovision.timer
+      enabled: true
+      contents: |
+        [Unit]
+        Description=System Post provision scheduler
+        ConditionPathExists=/var/.provisioned__
+
+        [Timer]
+        OnBootSec=30
+        Unit=postprovision.service
+
+        [Install]
+        WantedBy=timers.target
+    - name: postprovision.service
+      enabled: false
+      contents: |
+        [Unit]
+        Description=System Post provision
+        # We run this after the packages have been overlaid
+        After=network-online.target
+        ConditionPathExists=!/var/.postprovisioned__
+
+        [Service]
+        Type=oneshot
+        RemainAfterExit=yes
+        ExecStart=/usr/bin/echo "PasswordAuthentication yes" > /etc/ssh/sshd_config.d/02-enable-passwords.conf
+        ExecStart=/usr/bin/systemctl try-restart sshd
+        ExecStart=/usr/bin/touch /var/.postprovisioned__
+        ExecStart=/usr/bin/cp /var/tmp/50_node-readiness-ready.issue /etc/issue.d/50_node-readiness.issue
+        ExecStartPost=/usr/bin/systemctl --no-block reboot
+{% if cockpit_install %}
+    - name: cockpit-ws.service
+      enabled: true
+      contents: |
+        [Unit]
+        Description=Copckpit Webservice Container
+        After=network-online.target
+        ConditionPathExists=/var/.provisioned__
+
+        [Service]
+        Type=oneshot
+        RemainAfterExit=yes
+        TimeoutStartSec=900
+        KillMode=none
+        ExecStartPre=-/usr/bin/podman rm -f cockpit-ws
+        ExecStart=/usr/bin/podman container runlabel --name "cockpit-ws --label io.containers.autoupdate=registry -v /run/podman/podman.sock:/run/user/1001/podman/podman.sock:ro,z" RUN quay.io/cockpit/ws:latest -- -p 443
+        ExecStop=/usr/bin/podman rm -f cockpit-ws
+
+        [Install]
+        WantedBy=multi-user.target
+{% endif %}
+    - name: tmpcleaner.timer
+      enabled: true
+      contents: |
+        [Unit]
+        Description=Schedule /tmp Auto-Cleaner job
+        ConditionPathExists=/var/.postprovisioned__
+
+        [Timer]
+        Persistent=true
+        OnBootSec=300
+        OnUnitActiveSec=7d
+        Unit=tmpcleaner.service
+
+        [Install]
+        WantedBy=timers.target
+    - name: tmpcleaner.service
+      enabled: false
+      contents: |
+        [Unit]
+        Description=/tmp Auto-Cleaner job
+
+        [Service]
+        ExecStart=/usr/bin/find /tmp -type f -mmin -90 -exec rm -f {} \;
+    - name: podmancleaner.timer
+      enabled: true
+      contents: |
+        [Unit]
+        Description=Schedule Podman Auto prune job
+        ConditionPathExists=/var/.postprovisioned__
+
+        [Timer]
+        Persistent=true
+        OnBootSec=600
+        OnUnitActiveSec=7d
+        Unit=podmancleaner.service
+
+        [Install]
+        WantedBy=timers.target
+    - name: podmancleaner.service
+      enabled: false
+      contents: |
+        [Unit]
+        Description=Podman Auto prune job
+
+        [Service]
+        ExecStart=/usr/bin/podman image prune -af
+{% block units %}
+{% endblock units %}
+passwd:
+  users:
+    - name: soubinan
+      # Generated with: podman run -ti --rm quay.io/coreos/mkpasswd --method=yescrypt
+      password_hash: $y$j9T$g9YKY7yIoGzRTP9SFByZM1$SveAvxg1YDrg05tW4zXhaI9XcpBOnufKuiH7ALFUGuA
+      ssh_authorized_keys:
+        - ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQCh5qWa/Y4ZNh5TRMjOQQt24xDp6S3hhE9NT/DHouJpC34Oy9Ozd1SrOqzl7MFkOrrsDwAN0zuLelZ0jnt9V1MBAV7KW95yMKRAk8LjE09FO+8dFLZaGqKSQm2deEOe1V5YCMqQT82eRrDrZ2dfaRzDRqcJnT/U7xStqU5BxtUYXbKy3+WqVAuDHhq+BDYHgHFv9g9OOUkddZf4AnjSWY5WDFgMyGupeQFEpAEMSRGG9mMrka7mASN/zdarCyhTGgzqmkYU/FR0Zez5MZo4DiOxHuQjdNv0m8iVK5iE519UtTeu2IBei/VsoZd5d9FXwkNM/ieojAYs9kVeo3eJCmeYbwcLvOL5TyExHL9WREUFA5B4K5qE3E9OrXp/jUfIlEbLEa3cWDVbR+F2qYJogM/9EePF5GmFihioH8rQuHLkJJwJWRVlW+2GjWxRof93CjcDeU1Vg2Q6gIL85qVvPjxY+D38MKQAUWPI2z5/N+nu2QefOKlcBObWJZCW+Zquj80= soubinan@xps13
+      groups:
+        - wheel
+        - sudo
+{% block users %}
+{% endblock users %}

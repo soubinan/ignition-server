@@ -1,0 +1,45 @@
+controller:
+  template: ./controller.yaml
+  hostname: controller
+  cockpit_install: true
+  secrets_mount:
+    remote_server: 192.168.100.9
+    remote_path: /mtn/SoubiDrives/VirtualizedShare/containers/.secrets
+    local_path: /var/mnt/shared/containers/secrets
+  backups_mount:
+    remote_server: 192.168.100.9
+    remote_path: /mtn/SoubiDrives/VirtualizedShare/containers/backups
+    local_path: /var/mnt/shared/containers/backups
+  networks:
+  - gateway: 192.168.100.1
+    interface: eno1
+    ip: 192.168.100.6
+    nameserver: 192.168.100.1
+    prefix: 24
+controller_test:
+  template: ./controller.yaml
+  hostname: controller_test
+  cockpit_install: true
+  secrets_mount:
+    remote_server: 192.168.100.9
+    remote_path: /mtn/SoubiDrives/VirtualizedShare/containers/.secrets
+    local_path: /var/mnt/shared/containers/secrets
+  backups_mount:
+    remote_server: 192.168.100.9
+    remote_path: /mtn/SoubiDrives/VirtualizedShare/containers/backups
+    local_path: /var/mnt/shared/containers/backups
+  networks:
+  - gateway: 192.168.90.1
+    interface: enp1s0
+    ip: 192.168.90.6
+    nameserver: 192.168.90.1
+    prefix: 24
+icognito:
+  template: ./icognito.yaml
+  hostname: icognito
+mediatech:
+  template: ./mediatech.yaml
+  hostname: mediatech
+base:
+  template: ./base.yaml
+  hostname: coreos
