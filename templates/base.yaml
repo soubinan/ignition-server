@@ -1,41 +1,13 @@
+{% set containers = "/var/containers" %}
+{% set bindings = "/var/containers/bindings" %}
+{% set backups = "/var/containers/backups" %}
 variant: fcos
 version: 1.5.0
 storage:
-  disks:
-  - # The link to the block device the OS was booted from.
-    device: /dev/disk/by-id/coreos-boot-disk
-    wipe_table: false
-    partitions:
-    - number: 4
-      label: root
-      size_mib: 8192
-      resize: true
-    - label: var
-      size_mib: {{ data_partsize }}
-{%  for d in disks %}
-  - device: /dev/{{ d.name }}
-    wipe_table: {{ d.wipe_table | default("false", true) }}
-{%   for p in d.partitions %}
-    partitions:
-    - label: {{ p.label }}
-      size_mib: {{ p.size }}
-{%   endfor %}
-{%  endfor %}
-  filesystems:
-    - path: /var
-      device: /dev/disk/by-partlabel/var
-      format: xfs
-      with_mount_unit: true
-{%  for d in disks %}
-{%   for p in d.partitions %}
-    - path: /var/{{ p.label }}
-      device: /dev/disk/by-partlabel/{{ p.label }}
-      format: xfs
-      with_mount_unit: true
-{%   endfor %}
-{%  endfor %}
   directories:
-    - path: /var/cdata
+    - path: {{ containers }}
+    - path: {{ bindings }}
+    - path: {{ backups }}
 {% block directories %}
 {% endblock directories %}
   files:
@@ -43,6 +15,18 @@ storage:
       mode: 0644
       contents:
         inline: {{ hostname | default("coreos", true)}}
+    - path: /etc/issue.d/50_node-readiness.issue
+      mode: 0644
+      contents:
+        inline: "Readiness: provisioning started...\n"
+    - path: /var/tmp/50_node-readiness-ongoing.issue
+      mode: 0644
+      contents:
+        inline: "Readiness: provisioning still ongoing...\n"
+    - path: /var/tmp/50_node-readiness-ready.issue
+      mode: 0644
+      contents:
+        inline: "Readiness: ready\n"
     - path: /etc/profile.d/systemd-pager.sh
       mode: 0644
       contents:
@@ -120,23 +104,22 @@ systemd:
         # We run before `zincati.service` to avoid conflicting rpm-ostree
         # transactions.
         Before=zincati.service
-        ConditionPathExists=!/var/lib/.provisioned__
+        ConditionPathExists=!/var/.provisioned__
 
         [Service]
         Type=oneshot
         RemainAfterExit=yes
-        # No need Docker anymore ^^
+        # No need Docker anymore :D
         ExecStart=/usr/bin/rpm-ostree override remove docker
-        ExecStart=/usr/bin/rpm-ostree install --allow-inactive vim curl
-{% if install_cockpit %}
-        ExecStart=/usr/bin/rpm-ostree install --allow-inactive cockpit-system cockpit-ostree cockpit-podman cockpit-storaged cockpit-selinux cockpit-sosreport cockpit-networkmanager cockpit-kdump
+        ExecStart=/usr/bin/rpm-ostree install --allow-inactive cockpit-system cockpit-ostree cockpit-podman cockpit-storaged cockpit-packagekit cockpit-selinux cockpit-sosreport cockpit-networkmanager cockpit-kdump
+{% if xeguest_install %}
+        ExecStart=/usr/bin/rpm-ostree install --allow-inactive xe-guest-utilities-latest
+        ExecStart=/usr/bin/systemctl enable xe-linux-distribution --now
 {% endif %}
         ExecStart=/usr/bin/systemctl enable podman --now
-{% if install_xeguest %}
-        ExecStart=/usr/bin/rpm-ostree install --allow-inactive xe-guest-utilities-latest
-{% endif %}
-        ExecStart=/usr/bin/touch /var/lib/.provisioned__
-        ExecStart=/usr/bin/systemctl --no-block reboot
+        ExecStart=/usr/bin/touch /var/.provisioned__
+        ExecStart=/usr/bin/cp /var/tmp/50_node-readiness-ongoing.issue /etc/issue.d/50_node-readiness.issue
+        ExecStartPost=/usr/bin/systemctl --no-block reboot
 
         [Install]
         WantedBy=multi-user.target
@@ -145,10 +128,10 @@ systemd:
       contents: |
         [Unit]
         Description=System Post provision scheduler
-        ConditionPathExists=/var/lib/.provisioned__
+        ConditionPathExists=/var/.provisioned__
 
         [Timer]
-        OnBootSec=180
+        OnBootSec=30
         Unit=postprovision.service
 
         [Install]
@@ -160,46 +143,48 @@ systemd:
         Description=System Post provision
         # We run this after the packages have been overlaid
         After=network-online.target
-        ConditionPathExists=/var/lib/.provisioned__
-        ConditionPathExists=!/var/lib/.postprovisioned__
+        ConditionPathExists=!/var/.postprovisioned__
 
         [Service]
         Type=oneshot
         RemainAfterExit=yes
-{% if install_cockpit %}
         ExecStart=/usr/bin/echo "PasswordAuthentication yes" > /etc/ssh/sshd_config.d/02-enable-passwords.conf
         ExecStart=/usr/bin/systemctl try-restart sshd
-        ExecStart=/usr/bin/podman container runlabel INSTALL quay.io/cockpit/ws
-        ExecStart=/usr/bin/systemctl enable cockpit.service --now
-{% endif %}
-{% if install_xeguest %}
-        ExecStart=/usr/bin/systemctl enable xe-linux-distribution --now
-{% endif %}
-        ExecStart=/bin/touch /var/lib/.postprovisioned__
-        ExecStart=/usr/bin/systemctl --no-block reboot
-    - name: nodereadiness.service
-      enabled: enable
+        ExecStart=/usr/bin/touch /var/.postprovisioned__
+        ExecStart=/usr/bin/cp /var/tmp/50_node-readiness-ready.issue /etc/issue.d/50_node-readiness.issue
+        ExecStartPost=/usr/bin/systemctl --no-block reboot
+{% if cockpit_install %}
+    - name: cockpit-ws.service
+      enabled: true
       contents: |
         [Unit]
-        Description=System Post provision
-        # We run this after the packages have been overlaid
+        Description=Copckpit Webservice Container
         After=network-online.target
-        ConditionPathExists=/var/lib/.postprovisioned__
+        ConditionPathExists=/var/.provisioned__
 
         [Service]
         Type=oneshot
         RemainAfterExit=yes
-        ExecStart=/usr/bin/echo "State: $(hostname) is READY !!" > /etc/issue.d/50_node-readiness.issue
+        TimeoutStartSec=900
+        KillMode=none
+        ExecStartPre=-/usr/bin/podman rm -f cockpit-ws
+        ExecStart=/usr/bin/podman container runlabel --name "cockpit-ws --label io.containers.autoupdate=registry -v /run/podman/podman.sock:/run/user/1001/podman/podman.sock:ro,z" RUN quay.io/cockpit/ws:latest -- -p 443
+        ExecStop=/usr/bin/podman rm -f cockpit-ws
+
+        [Install]
+        WantedBy=multi-user.target
+{% endif %}
     - name: tmpcleaner.timer
       enabled: true
       contents: |
         [Unit]
-        Description=Schedule the /tmp Auto-Cleaner job
+        Description=Schedule /tmp Auto-Cleaner job
+        ConditionPathExists=/var/.postprovisioned__
 
         [Timer]
         Persistent=true
         OnBootSec=300
-        OnUnitActiveSec=60
+        OnUnitActiveSec=7d
         Unit=tmpcleaner.service
 
         [Install]
@@ -212,6 +197,29 @@ systemd:
 
         [Service]
         ExecStart=/usr/bin/find /tmp -type f -mmin -90 -exec rm -f {} \;
+    - name: podmancleaner.timer
+      enabled: true
+      contents: |
+        [Unit]
+        Description=Schedule Podman Auto prune job
+        ConditionPathExists=/var/.postprovisioned__
+
+        [Timer]
+        Persistent=true
+        OnBootSec=600
+        OnUnitActiveSec=7d
+        Unit=podmancleaner.service
+
+        [Install]
+        WantedBy=timers.target
+    - name: podmancleaner.service
+      enabled: false
+      contents: |
+        [Unit]
+        Description=Podman Auto prune job
+
+        [Service]
+        ExecStart=/usr/bin/podman image prune -af
 {% block units %}
 {% endblock units %}
 passwd:

@@ -1,10 +1,15 @@
 controller:
   template: ./controller.yaml
   hostname: controller
-  data_partdisk: sda
-  data_partsize: 180000
-  data_path: /var/cdata
-  install_cockpit: true
+  cockpit_install: true
+  secrets_mount:
+    remote_server: 192.168.100.9
+    remote_path: /mtn/SoubiDrives/VirtualizedShare/containers/.secrets
+    local_path: /var/mnt/shared/containers/secrets
+  backups_mount:
+    remote_server: 192.168.100.9
+    remote_path: /mtn/SoubiDrives/VirtualizedShare/containers/backups
+    local_path: /var/mnt/shared/containers/backups
   networks:
   - gateway: 192.168.100.1
     interface: eno1
@@ -14,34 +19,27 @@ controller:
 controller_test:
   template: ./controller.yaml
   hostname: controller_test
-  data_partsize: 5000
-  data_path: /var/cdata
-  install_cockpit: true
+  cockpit_install: true
+  secrets_mount:
+    remote_server: 192.168.100.9
+    remote_path: /mtn/SoubiDrives/VirtualizedShare/containers/.secrets
+    local_path: /var/mnt/shared/containers/secrets
+  backups_mount:
+    remote_server: 192.168.100.9
+    remote_path: /mtn/SoubiDrives/VirtualizedShare/containers/backups
+    local_path: /var/mnt/shared/containers/backups
   networks:
   - gateway: 192.168.90.1
     interface: enp1s0
     ip: 192.168.90.6
     nameserver: 192.168.90.1
     prefix: 24
-grabber:
-  hostname: grabber
-  template: ./grabber.yaml
-metal:
-  template: ./base_metal.yaml
-plex:
-  hostname: plex
-  template: ./plex.yaml
-scraper:
-  hostname: scraper
-  template: ./scraper.yaml
-tunnel:
-  hostname: tunnel
-  template: ./tunnel.yaml
-xcpng:
-  template: ./base_xcpng.yaml
+icognito:
+  template: ./icognito.yaml
+  hostname: icognito
+mediatech:
+  template: ./mediatech.yaml
+  hostname: mediatech
 base:
   template: ./base.yaml
   hostname: coreos
-  data_partdisk: none
-  data_partsize: 0
-  data_path: /var/cdata

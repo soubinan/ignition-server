@@ -1,15 +1,14 @@
 {% extends "base.yaml" %}
 {% block directories %}
-    - path: {{ data_path }}/redis/data
-    - path: {{ data_path }}/mysql/data
-    - path: {{ data_path }}/homarr/icons
-    - path: {{ data_path }}/homarr/configs
-    - path: {{ data_path }}/homarr/data
-    - path: {{ data_path }}/xenorchestra/data
-    - path: {{ data_path }}/xenorchestra/backup
+    - path: {{ secrets_mount.local_path }}
+    - path: {{ backups_mount.local_path }}
+    - path: {{ bindings }}/mysql
+    - path: {{ bindings }}/xenorchestra
+    - path: {{ bindings }}/cloudstack
+    - path: {{ bindings }}/backup
 {% endblock directories %}
 {% block files %}
-    - path: {{ data_path }}/xenorchestra/config.toml
+    - path: {{ bindings }}/xenorchestra/config.toml
       mode: 0644
       contents:
         inline: |
@@ -49,22 +48,57 @@
           # Each configuration is passed to the dedicated plugin instance
           #
           # Syntax: [plugins.<pluginName>]
-    - path: {{ data_path }}/mysql/cloudstack.cnf
+    - path: {{ bindings }}/mysql/cloudstack.cnf
       mode: 0644
       contents:
         inline: |
           [mysqld]
+          server-id=01
           innodb_rollback_on_timeout=1
           innodb_lock_wait_timeout=600
-          # max_connections depends on the db servers number (350 * db_servers_count)
-          # for 1 db server  => 350
-          # for 2 db servers => 700
-          # for n db servers => n * 350
           max_connections=350
           log-bin=mysql-bin
           binlog-format = 'ROW'
+    - path: {{ bindings }}/backup/common.env
+      mode: 0644
+      contents:
+        inline: |
+          ########### BACKUP SCHEDULE
+          BACKUP_CRON_EXPRESSION="0 */6 * * *"
+          BACKUP_COMPRESSION="gz"
+          GZIP_PARALLELISM=1
+          BACKUP_EXCLUDE_REGEXP="\.log$"
+          ########### BACKUP STORAGE
+          BACKUP_ARCHIVE="/archive"
+          ########### BACKUP PRUNING
+          BACKUP_RETENTION_DAYS="7"
+          BACKUP_PRUNING_LEEWAY="1m"
+          ########### BACKUP ENCRYPTION
+          # GPG_PASSPHRASE="<xxx>"
+          ########### NOTIFICATIONS
+          # Notifications (email, Slack, etc.) can be sent out when a backup run finishes.
+          # Configuration is provided as a comma-separated list of URLs as consumed
+          # by `shoutrrr`: https://containrrr.dev/shoutrrr/0.7/services/overview/
+          # The content of such notifications can be customized. Dedicated documentation
+          # on how to do this can be found in the README. When providing multiple URLs or
+          # an URL that contains a comma, the values can be URL encoded to avoid ambiguities.
+          # The below URL demonstrates how to send an email using the provided SMTP
+          # configuration and credentials.
+
+          # NOTIFICATION_URLS=smtp://username:password@host:587/?fromAddress=sender@example.com&toAddresses=recipient@example.com
+          # NOTIFICATION_LEVEL="error"
+{% set apps = ['redis', 'mysql', 'homarr', 'xenorchestra', 'cloudstack'] %}
+{% for app in apps %}
+    - path: {{ bindings }}/backup/{{ app }}.env
+      mode: 0644
+      contents:
+        inline: |
+          BACKUP_SOURCES="/backup/{{ app }}"
+          BACKUP_FILENAME="backup-{{ app }}-%F.%N.tar.gz"
+          BACKUP_LATEST_SYMLINK="backup-{{ app }}-latest.tar.gz"
+{% endfor %}
     # Containers Networks
-    - path: /etc/containers/systemd/frontend.network
+    - path: /etc/containers/systemd/base.network
       mode: 0644
       contents:
         inline: |
@@ -72,28 +106,22 @@
           Description=Frontnet container network for externally accessible services
           After=network-online.target
 
-          [Install]
-          WantedBy=multi-user.target
-    - path: /etc/containers/systemd/mysql.network
-      mode: 0644
-      contents:
-        inline: |
-          [Unit]
-          Description=MySQL container network
-          After=network-online.target
+          [Network]
+          IPRange=10.100.1.1/24
 
           [Install]
           WantedBy=multi-user.target
-    - path: /etc/containers/systemd/redis.network
+    # Volumes
+{% set volumes = ['redis_data', 'redis_dump', 'mysql_data', 'mysql_dump', 'homarr_data', 'homarr_icons', 'homarr_configs', 'homarr_dump', 'xenorchestra_data', 'xenorchestra_backup', 'xenorchestra_dump', 'cloudstack_data', 'cloudstack_configs', 'cloudstack_dump'] %}
+{% for volume in volumes %}
+    - path: /etc/containers/systemd/{{ volume }}.volume
       mode: 0644
       contents:
         inline: |
-          [Unit]
-          Description=Redis container network
-          After=network-online.target
-
-          [Install]
-          WantedBy=multi-user.target
+          [Volume]
+          User=core
+          Group=core
+{% endfor %}
     # Containers
     - path: /etc/containers/systemd/redis.container
       mode: 0644
@@ -101,7 +129,8 @@
         inline: |
           [Unit]
           Description=Redis Container
-          After=network-online.target
+          After=network-online.target pre-start.service secrets-injector.service
+          ConditionPathExists=/var/.postprovisioned__
 
           [Service]
           TimeoutStartSec=900
@@ -114,8 +143,10 @@
           Exec=redis-server --appendonly yes
           AutoUpdate=registry
           HostName=redis
-          Network=redis.network
-          Volume={{ data_path }}/redis/data:/data:Z
+          Network=base.network
+          Volume=redis_data.volume:/data:Z
+          Volume=redis_dump.volume:/backup:z
+          Label=docker-volume-backup.archive-pre=/bin/cp -r /data/dump.rdb /backup/redisdump.rdb
 
           [Install]
           WantedBy=multi-user.target
@@ -125,7 +156,8 @@
         inline: |
           [Unit]
           Description=MySQL Container
-          After=network-online.target
+          After=network-online.target pre-start.service secrets-injector.service
+          ConditionPathExists=/var/.postprovisioned__
 
           [Service]
           TimeoutStartSec=900
@@ -134,13 +166,16 @@
           User=core
           Group=core
           ContainerName=mysql
-          Image=docker.io/library/mysql:8.0-debian
+          Image=docker.io/library/mysql:5-debian
           AutoUpdate=registry
           HostName=mysql
-          Network=mysql.network
-          Volume={{ data_path }}/mysql/cloudstack.cnf:/etc/mysql/conf.d/cloudstack.cnf:Z
-          Volume={{ data_path }}/mysql/data:/var/lib/mysql:Z
-          Environment=MYSQL_ALLOW_EMPTY_PASSWORD=true
+          Network=base.network
+          Volume={{ bindings }}/mysql/cloudstack.cnf:/etc/mysql/conf.d/cloudstack.cnf:ro,Z
+          Volume=mysql_data.volume:/var/lib/mysql:Z
+          Volume=mysql_dump.volume:/backup:z
+          Secret=mysql-root-pwd,type=env,target=MYSQL_ROOT_PASSWORD
+          Secret=mysql-init,type=mount,target=/docker-entrypoint-initdb.d/01_cloudstack_init.sql
+          Label=docker-volume-backup.archive-pre=/bin/sh -c 'mysqldump -u root --password=$MYSQL_ROOT_PASSWORD -A > /backup/mysqldump.sql'
 
           [Install]
           WantedBy=multi-user.target
@@ -150,7 +185,8 @@
         inline: |
           [Unit]
           Description=Homarr Container
-          After=network-online.target
+          After=network-online.target pre-start.service secrets-injector.service
+          ConditionPathExists=/var/.postprovisioned__
 
           [Service]
           TimeoutStartSec=900
@@ -163,12 +199,15 @@
           AutoUpdate=registry
           HostName=home.lab.soubilabs.xyz
           PublishPort=7575:7575
-          Network=frontend.network
-          Volume={{ data_path }}/homarr/icons:/app/public/icons:Z
-          Volume={{ data_path }}/homarr/configs:/app/data/configs:Z
-          Volume={{ data_path }}/homarr/data:/data:Z
-          Volume=/run/podman/podman.sock:/var/run/docker.sock:ro
+          Network=base.network
+          Volume=homarr_data.volume:/data:Z
+          Volume=homarr_icons.volume:/app/public/icons:Z
+          Volume=homarr_configs.volume:/app/data/configs:Z
+          Volume=homarr_dump.volume:/backup:z
+          Volume=/run/podman/podman.sock:/var/run/docker.sock:ro,z
           SecurityLabelDisable=true
+          Label=docker-volume-backup.archive-pre=/bin/cp -r /data /app/public/icons /app/data/configs /backup
+          # Label=docker-volume-backup.stop-during-backup=true
 
           [Install]
           WantedBy=multi-user.target
@@ -178,7 +217,9 @@
         inline: |
           [Unit]
           Description=XEN Orchestra Container
-          After=network-online.target
+          After=network-online.target pre-start.service secrets-injector.service redis.service
+          Wants=redis.service
+          ConditionPathExists=/var/.postprovisioned__
 
           [Service]
           TimeoutStartSec=900
@@ -191,13 +232,147 @@
           AutoUpdate=registry
           HostName=xcpng.lab.soubilabs.xyz
           PublishPort=8088:80
-          Network=frontend.network
-          Network=redis.network
-          Volume={{ data_path }}/xenorchestra/config.toml:/etc/xo-server/config.toml:Z
-          Volume={{ data_path }}/xenorchestra/data:/var/lib/xo-server/data:Z
-          Volume={{ data_path }}/xenorchestra/backup:/var/lib/xoa-backup:Z
-          AddCapability=CAP_SYS_ADMIN CAP_DAC_READ_SEARCH
+          Network=base.network
+          Volume={{ bindings }}/xenorchestra/config.toml:/etc/xo-server/config.toml:ro,Z
+          Volume=xenorchestra_data.volume:/var/lib/xo-server/data:Z
+          Volume=xenorchestra_backup.volume:/var/lib/xoa-backup:Z
+          Volume=xenorchestra_dump.volume:/backup:z
+          PodmanArgs= --privileged
+          Label=docker-volume-backup.archive-pre=/bin/cp -r /etc/xo-server /var/lib/xo-server/data /var/lib/xoa-backup /backup
+          # Label=docker-volume-backup.stop-during-backup=true
+
+          [Install]
+          WantedBy=multi-user.target
+    - path: /etc/containers/systemd/cloudstack.container
+      mode: 0644
+      contents:
+        inline: |
+          [Unit]
+          Description=Cloudstack Container
+          After=network-online.target pre-start.service secrets-injector.service mysql.service
+          Wants=mysql.service
+          ConditionPathExists=/var/.postprovisioned__
+
+          [Service]
+          TimeoutStartSec=900
+
+          [Container]
+          User=core
+          Group=core
+          ContainerName=cloudstack
+          Image=ghcr.io/soubinan/cloudstack-mgt:latest
+          AutoUpdate=registry
+          HostName=cloud.lab.soubilabs.xyz
+          PublishPort=8080:8080
+          PublishPort=8443:8443
+          PublishPort=9090:9090
+          PublishPort=8250:8250
+          Network=base.network
+          IP=10.100.1.123
+          Volume=cloudstack_configs.volume:/etc/cloudstack:z
+          Volume=cloudstack_data.volume:/var/cloudstack:z
+          Secret=cloudstack-env,type=mount,target=/etc/default/cloudstack-init
+          PodmanArgs= --privileged
+          Label=docker-volume-backup.archive-pre=/bin/cp -r /etc/cloudstack /var/cloudstack /backup
+          # Label=docker-volume-backup.stop-during-backup=true
+
+          [Install]
+          WantedBy=multi-user.target
+    - path: /etc/containers/systemd/backup.container
+      mode: 0644
+      contents:
+        inline: |
+          [Unit]
+          Description=Container Volume Backup
+          After=network-online.target pre-start.service secrets-injector.service
+          ConditionPathExists=/var/.postprovisioned__
+
+          [Service]
+          TimeoutStartSec=900
+
+          [Container]
+          User=core
+          Group=core
+          ContainerName=backup
+          Image=docker.io/offen/docker-volume-backup:latest
+          AutoUpdate=registry
+          EnvironmentFile={{ bindings }}/backup/.env
+          # Volume=/run/podman/podman.sock:/var/run/docker.sock:ro,z
+          Volume={{ backups_mount.local_path }}:/archive:ro,z
+          Volume=redis_dump.volume:/backup/redis:ro,z
+          Volume=mysql_dump.volume:/backup/mysql:ro,z
+          Volume=homarr_dump.volume:/backup/homarr:ro,z
+          Volume=xenorchestra_dump.volume:/backup/xenorchestra:ro,z
+          Volume=cloudstack_dump.volume:/backup/cloudstack:ro,z
 
           [Install]
           WantedBy=multi-user.target
 {% endblock files %}
+{% block units %}
+    - name: {{ (secrets_mount.local_path| trim("/")) | replace("/", "-") }}.mount
+      enabled: true
+      contents: |
+        [Unit]
+        Description=Mount data directory
+        After=network-online.target pre-start.service
+
+        [Mount]
+        What={{ secrets_mount.remote_server }}:{{ secrets_mount.remote_path }}
+        Where={{ secrets_mount.local_path }}
+        Type=nfs4
+
+        [Install]
+        WantedBy=multi-user.target
+    - name: {{ (backups_mount.local_path| trim("/")) | replace("/", "-") }}.mount
+      enabled: true
+      contents: |
+        [Unit]
+        Description=Mount data directory
+        After=network-online.target pre-start.service
+
+        [Mount]
+        What={{ backups_mount.server }}:{{ backups_mount.path }}
+        Where={{ backups_mount.local_path }}
+        Type=nfs4
+
+        [Install]
+        WantedBy=multi-user.target
+    - name: secrets-injector.service
+      enabled: true
+      contents: |
+        [Unit]
+        Description=Podman Secrets Injector Job
+        After=network-online.target pre-start.service {{ (secrets_mount.local_path| trim("/")) | replace("/", "-") }}.mount
+        Wants={{ (secrets_mount.local_path| trim("/")) | replace("/", "-") }}.mount
+        ConditionPathExists=/var/.postprovisioned__
+        ConditionPathExists=!{{ containers }}/.secrets_ready__
+
+        [Service]
+        Type=oneshot
+        RemainAfterExit=yes
+        ExecStart=/usr/bin/podman secret create mysql-root-pwd {{ secrets_mount.local_path }}/MYSQL_ROOT_PWD
+        ExecStart=/usr/bin/podman secret create mysql-init {{ secrets_mount.local_path }}/01_cloudstack_init.sql
+        ExecStart=/usr/bin/podman secret create cloudstack-env {{ secrets_mount.local_path }}/CLOUDSTACK.env
+        # Secrets injection terminated
+        ExecStart=/usr/bin/touch {{ containers }}/.secrets_ready__
+
+        [Install]
+        WantedBy=multi-user.target
+    - name: pre-start.service
+      enabled: true
+      contents: |
+        [Unit]
+        Description=Post Setup Job
+        After=network-online.target
+        ConditionPathExists=/var/.postprovisioned__
+        ConditionPathExists=!/var/.pre-start__
+
+        [Service]
+        Type=oneshot
+        RemainAfterExit=yes
+        # Special config setup here
+        ExecStart=/usr/bin/touch /var/.pre-start__
+
+        [Install]
+        WantedBy=multi-user.target
+{% endblock units %}
