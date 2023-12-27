@@ -27,9 +27,9 @@ jobs:
           images: |
             ghcr.io/${{ env.IMAGE_NAME }}
           tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=semver,pattern={{major}}
+            type=semver,pattern={{ version }}
+            type=semver,pattern={{ major }}.{{ minor }}
+            type=semver,pattern={{ major }}
             type=raw,latest
           labels: |
             org.opencontainers.image.source=${{ env.PROJECT_URL }}
@@ -38,6 +38,7 @@ jobs:
             org.opencontainers.image.description=Ignition as a service
             org.opencontainers.image.authors=${{ env.AUTHOR }}
             org.opencontainers.image.licenses=CC-BY-SA-4.0
+            org.opencontainers.image.version={{ version }}
       - name: Install cosign
         if: github.event_name == 'release'
         uses: sigstore/cosign-installer@v3
@@ -60,6 +61,8 @@ jobs:
           file: "./Containerfile"
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            version={{ version }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
           push: ${{ github.event_name == 'release' }}
